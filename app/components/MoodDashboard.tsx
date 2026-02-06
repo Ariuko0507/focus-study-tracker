@@ -15,8 +15,22 @@ export default function MoodDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [timeFilter, setTimeFilter] = useState<"today" | "week" | "all">("today");
-  const [allTimeGroup, setAllTimeGroup] = useState<"day" | "week" | "month" | "year">("day");
+  const [timeFilter, setTimeFilter] = useState<"today" | "all">("today");
+  const [allTimeGroup, setAllTimeGroup] = useState<"week" | "month" | "year">("month");
+  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
+  const [selectedWeek, setSelectedWeek] = useState(() => {
+    const now = new Date();
+    const day = now.getDay();
+    const diff = (day + 6) % 7;
+    const monday = new Date(now);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(now.getDate() - diff);
+    const yearStart = new Date(monday.getFullYear(), 0, 1);
+    const days = Math.floor((monday.getTime() - yearStart.getTime()) / 86400000);
+    const week = Math.floor((days + 1 + ((yearStart.getDay() + 6) % 7)) / 7) + 1;
+    return `${monday.getFullYear()}-W${String(week).padStart(2, "0")}`;
+  });
   const [liveSeconds, setLiveSeconds] = useState<number | null>(null);
   const [liveSubject, setLiveSubject] = useState<string>("");
   const [liveMood, setLiveMood] = useState<string>("");
