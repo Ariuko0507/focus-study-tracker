@@ -19,15 +19,56 @@ export default function Schedule() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSubject, setEditSubject] = useState("");
   const [editDeadline, setEditDeadline] = useState("");
+  const [liveSeconds, setLiveSeconds] = useState<number | null>(null);
+  const [liveSubject, setLiveSubject] = useState<string>("");
+  const [now, setNow] = useState(() => new Date());
+
+  const toLocalInputValueFromDate = (d: Date) => {
+    const tzOffset = d.getTimezoneOffset() * 60000;
+    const local = new Date(d.getTime() - tzOffset);
+    return local.toISOString().slice(0, 16);
+  };
 
   useEffect(() => {
     fetchSchedules();
-    // Set default deadline to tomorrow at noon
+    // Set default deadline to tomorrow at noon (local time)
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(12, 0, 0, 0);
-    const formatted = tomorrow.toISOString().slice(0, 16);
-    setDeadline(formatted);
+    setDeadline(toLocalInputValueFromDate(tomorrow));
+  }, []);
+
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    tick();
+    const interval = window.setInterval(tick, 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const syncLiveSession = () => {
+      try {
+        const running = localStorage.getItem("timer_running") === "1";
+        const startedAt = localStorage.getItem("timer_started_at");
+        const subjectStored = localStorage.getItem("timer_subject");
+
+        if (running && startedAt) {
+          const elapsed = Math.floor((Date.now() - Number(startedAt)) / 1000);
+          setLiveSeconds(elapsed < 0 ? 0 : elapsed);
+          setLiveSubject(subjectStored || "");
+        } else {
+          setLiveSeconds(null);
+          setLiveSubject("");
+        }
+      } catch {
+        setLiveSeconds(null);
+        setLiveSubject("");
+      }
+    };
+
+    syncLiveSession();
+    const interval = window.setInterval(syncLiveSession, 1000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const fetchSchedules = async () => {
@@ -89,7 +130,7 @@ export default function Schedule() {
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       tomorrow.setHours(12, 0, 0, 0);
-      setDeadline(tomorrow.toISOString().slice(0, 16));
+      setDeadline(toLocalInputValueFromDate(tomorrow));
     }
   };
 
@@ -125,16 +166,10 @@ export default function Schedule() {
     return <div className="text-center py-8">Loading schedules...</div>;
   }
 
-  const now = new Date();
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(now);
-  endOfDay.setHours(23, 59, 59, 999);
-
   const getStatus = (s: ScheduleItem) => {
     if (s.completed) return "completed";
     const deadlineDate = new Date(s.deadline);
-    if (deadlineDate < startOfDay) return "overdue";
+    if (deadlineDate < now) return "overdue";
     return "doing";
   };
 
@@ -200,9 +235,29 @@ export default function Schedule() {
     );
   };
 
+  const formatDuration = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${h}h ${m}m ${sec}s`;
+  };
+
   return (
     <div className="space-y-6">
-      <h3 className="text-2xl font-semibold mb-4">📅 Deadlines & Schedule</h3>
+      <h3 className="text-2xl font-semibold mb-4 text-[#0b2b26]">📅 Deadlines & Schedule</h3>
+      {liveSeconds !== null && (
+        <div className="bg-white p-6 rounded-xl shadow border-2 border-emerald-200">
+          <div className="flex items-center justify-between mb-2 text-emerald-900">
+            <h3 className="text-xl font-semibold">🟢 Live Session</h3>
+          </div>
+          <div className="text-sm text-gray-600 mb-2">
+            {liveSubject || "No subject selected"}
+          </div>
+          <div className="text-3xl font-bold text-emerald-900">
+            {formatDuration(liveSeconds)}
+          </div>
+        </div>
+      )}
 
       {/* Add Schedule Form */}
       <div className="bg-white p-6 rounded-xl shadow space-y-4">
@@ -219,7 +274,7 @@ export default function Schedule() {
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
               placeholder="e.g., Math Homework, Physics Lab Report"
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 focus:outline-none"
+              className="w-full p-3 border-2 rounded-lg focus:ring-2 focus:outline-none bg-[#e7f3ea] border-[#8eb69b] focus:ring-[#235347]"
               onKeyPress={(e) => {
                 if (e.key === 'Enter') {
                   addSchedule();
@@ -237,14 +292,14 @@ export default function Schedule() {
               type="datetime-local"
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 focus:outline-none"
+              className="w-full p-3 border-2 rounded-lg focus:ring-2 focus:outline-none bg-[#e7f3ea] border-[#8eb69b] focus:ring-[#235347]"
             />
           </div>
 
           {/* Add Button */}
           <button
             onClick={addSchedule}
-            className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition shadow-sm hover:shadow-md"
+            className="w-full px-6 py-3 bg-[#163832] text-[#daf1de] rounded-lg hover:bg-[#0b2b26] font-medium transition shadow-sm hover:shadow-md"
           >
             ➕ Add Deadline
           </button>
@@ -259,8 +314,8 @@ export default function Schedule() {
             activeTab === "doing" ? "border-blue-400" : "border-transparent"
           }`}
         >
-          <div className="text-blue-600 text-sm font-medium mb-1">🔥 Doing</div>
-          <div className="text-3xl font-bold text-blue-900">
+          <div className="text-[#163832] text-sm font-medium mb-1">🔥 Doing</div>
+          <div className="text-3xl font-bold text-[#0b2b26]">
             {schedules.filter(s => getStatus(s) === "doing").length}
           </div>
         </button>
@@ -270,8 +325,8 @@ export default function Schedule() {
             activeTab === "completed" ? "border-green-400" : "border-transparent"
           }`}
         >
-          <div className="text-green-600 text-sm font-medium mb-1">✅ Completed</div>
-          <div className="text-3xl font-bold text-green-900">
+          <div className="text-[#163832] text-sm font-medium mb-1">✅ Completed</div>
+          <div className="text-3xl font-bold text-[#0b2b26]">
             {schedules.filter(s => s.completed).length}
           </div>
         </button>
@@ -281,8 +336,8 @@ export default function Schedule() {
             activeTab === "overdue" ? "border-red-400" : "border-transparent"
           }`}
         >
-          <div className="text-red-600 text-sm font-medium mb-1">⚠️ Overdue</div>
-          <div className="text-3xl font-bold text-red-900">
+          <div className="text-[#163832] text-sm font-medium mb-1">⚠️ Overdue</div>
+          <div className="text-3xl font-bold text-[#0b2b26]">
             {schedules.filter(s => getStatus(s) === "overdue").length}
           </div>
         </button>
@@ -299,7 +354,7 @@ export default function Schedule() {
         <div className="space-y-3">
           {filteredSchedules.map((s) => {
             const deadlineDate = new Date(s.deadline);
-            const isOverdue = deadlineDate < startOfDay && !s.completed;
+            const isOverdue = deadlineDate < now && !s.completed;
             const msLeft = deadlineDate.getTime() - now.getTime();
             const hoursLeft = Math.floor(msLeft / (1000 * 60 * 60));
             const daysLeft = Math.floor(hoursLeft / 24);

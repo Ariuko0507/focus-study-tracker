@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -17,6 +17,8 @@ export default function ActivityLog() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'task' | 'mistake' | 'schedule' | 'note'>('all');
+  const [liveSeconds, setLiveSeconds] = useState<number | null>(null);
+  const [liveSubject, setLiveSubject] = useState<string>("");
 
   useEffect(() => {
     fetchActivities();
@@ -31,6 +33,35 @@ export default function ActivityLog() {
     return () => {
       window.removeEventListener("mistake-updated", handleMistakeUpdated);
     };
+  }, []);
+
+  useEffect(() => {
+    const syncLiveSession = () => {
+      try {
+        const running = localStorage.getItem("timer_running") === "1";
+        const startedAt = localStorage.getItem("timer_started_at");
+        const storedSeconds = localStorage.getItem("timer_seconds");
+        const subjectStored = localStorage.getItem("timer_subject");
+
+        if (running) {
+          const elapsed = startedAt
+            ? Math.floor((Date.now() - Number(startedAt)) / 1000)
+            : Number(storedSeconds || "0");
+          setLiveSeconds(elapsed < 0 ? 0 : elapsed);
+          setLiveSubject(subjectStored || "");
+        } else {
+          setLiveSeconds(null);
+          setLiveSubject("");
+        }
+      } catch {
+        setLiveSeconds(null);
+        setLiveSubject("");
+      }
+    };
+
+    syncLiveSession();
+    const interval = window.setInterval(syncLiveSession, 1000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const fetchActivities = async () => {
@@ -50,10 +81,10 @@ export default function ActivityLog() {
             type: 'task',
             id: t.id,
             subject: t.task,
-            description: `Studied for ${formatDuration(t.duration)}`,
+            description: `Studied for ${formatDurationFull(t.duration)}`,
             timestamp: t.created_at,
             duration: t.duration,
-            mood: t.mood,
+            mood: t.duration > 0 ? t.mood : undefined,
           });
         });
       }
@@ -130,10 +161,13 @@ export default function ActivityLog() {
     setLoading(false);
   };
 
-  const formatDuration = (s: number) => {
+  const formatDurationFull = (s: number) => {
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
-    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    const sec = s % 60;
+    return `${h.toString().padStart(2, "0")}:${m
+      .toString()
+      .padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
   };
 
   const getIcon = (type: string) => {
@@ -160,7 +194,21 @@ export default function ActivityLog() {
 
   return (
     <div className="space-y-6">
-      <h3 className="text-3xl font-bold">📊 Activity Log</h3>
+      <h3 className="text-3xl font-bold text-[#0b2b26]">📊 Activity Log</h3>
+
+      {liveSeconds !== null && (
+        <div className="bg-white p-6 rounded-xl shadow border-2 border-emerald-200">
+          <div className="flex items-center justify-between mb-2 text-emerald-900">
+            <h3 className="text-xl font-semibold">🟢 Live Session</h3>
+          </div>
+          <div className="text-sm text-gray-600 mb-2">
+            {liveSubject || "No subject selected"}
+          </div>
+          <div className="text-3xl font-bold text-emerald-900">
+            {formatDurationFull(liveSeconds)}
+          </div>
+        </div>
+      )}
 
       {/* Filter Buttons */}
       <div className="flex flex-wrap gap-2">
@@ -174,10 +222,7 @@ export default function ActivityLog() {
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
-            {f === 'all' ? '🔍 All' : 
-             f === 'task' ? '📚 Study' :
-             f === 'mistake' ? '⚠️ Mistakes' :
-             f === 'schedule' ? '📅 Deadlines' : '📝 Notes'}
+            {f === 'all' ? '🔍 All' : f === 'task' ? '📚 Study' : f === 'mistake' ? '⚠️ Mistakes' : f === 'schedule' ? '📅 Deadlines' : '📝 Notes'}
           </button>
         ))}
       </div>
@@ -190,7 +235,7 @@ export default function ActivityLog() {
         {/* Activities */}
         <div className="space-y-4">
           {activities.map((activity, index) => (
-            <div key={activity.id} className="relative flex gap-4">
+            <div key={`${activity.type}-${activity.id}`} className="relative flex gap-4">
               {/* Timeline Dot */}
               <div className="relative z-10 flex-shrink-0">
                 <div className="w-16 h-16 bg-white border-4 border-indigo-600 rounded-full flex items-center justify-center text-2xl shadow-lg">
@@ -202,8 +247,8 @@ export default function ActivityLog() {
               <div className={`flex-1 p-4 rounded-xl border-2 ${getColor(activity.type)} shadow-md hover:shadow-lg transition`}>
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <h4 className="font-bold text-lg">{activity.subject}</h4>
-                    <p className="text-gray-700">{activity.description}</p>
+                    <h4 className="font-bold text-lg text-[#0b2b26]">{activity.subject}</h4>
+                    <p className="text-[#1e3a34]">{activity.description}</p>
                   </div>
                   {activity.mood && (
                     <span className="text-3xl">{activity.mood}</span>
@@ -216,7 +261,7 @@ export default function ActivityLog() {
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-[#1e3a34]">
                   {new Date(activity.timestamp).toLocaleString()}
                 </div>
               </div>
@@ -233,3 +278,6 @@ export default function ActivityLog() {
     </div>
   );
 }
+
+
+

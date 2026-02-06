@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import MistakeTracker from "./MistakeTracker";
@@ -11,29 +11,33 @@ interface Task {
   created_at: string;
 }
 
+interface Subject {
+  id: string;
+  name: string;
+  color: string;
+}
+
+interface GoalItem {
+  id: string;
+  subject: string;
+  title: string;
+  totalSeconds: number;
+  remainingSeconds: number;
+  createdAt: number;
+}
+
 export default function MoodDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [timeFilter, setTimeFilter] = useState<"today" | "all">("today");
-  const [allTimeGroup, setAllTimeGroup] = useState<"week" | "month" | "year">("month");
-  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
-  const [selectedWeek, setSelectedWeek] = useState(() => {
-    const now = new Date();
-    const day = now.getDay();
-    const diff = (day + 6) % 7;
-    const monday = new Date(now);
-    monday.setHours(0, 0, 0, 0);
-    monday.setDate(now.getDate() - diff);
-    const yearStart = new Date(monday.getFullYear(), 0, 1);
-    const days = Math.floor((monday.getTime() - yearStart.getTime()) / 86400000);
-    const week = Math.floor((days + 1 + ((yearStart.getDay() + 6) % 7)) / 7) + 1;
-    return `${monday.getFullYear()}-W${String(week).padStart(2, "0")}`;
-  });
+  const [timeFilter, setTimeFilter] = useState<"today" | "week">("today");
+  const [allTimeGroup] = useState<"week">("week");
+  
   const [liveSeconds, setLiveSeconds] = useState<number | null>(null);
   const [liveSubject, setLiveSubject] = useState<string>("");
-  const [liveMood, setLiveMood] = useState<string>("");
+  const [goals, setGoals] = useState<GoalItem[]>([]);
+  const [activeGoals, setActiveGoals] = useState<Record<string, string>>({});
+  const [subjects, setSubjects] = useState<Subject[]>([]);
 
   useEffect(() => {
     fetchTasks();
@@ -44,27 +48,67 @@ export default function MoodDashboard() {
   }, []);
 
   useEffect(() => {
+    fetchSubjects();
+  }, []);
+
+  useEffect(() => {
+    const loadGoals = () => {
+      try {
+        const rawGoals = localStorage.getItem("timer_goals_by_subject");
+        const parsedGoals = rawGoals ? JSON.parse(rawGoals) : {};
+        const flattened: GoalItem[] = [];
+        if (parsedGoals && typeof parsedGoals === "object") {
+          Object.entries(parsedGoals as Record<string, unknown>).forEach(([subject, value]) => {
+            if (Array.isArray(value)) {
+              value.forEach((item) => {
+                if (item && typeof item === "object") {
+                  const candidate = item as GoalItem;
+                  flattened.push({ ...candidate, subject: candidate.subject || subject });
+                }
+              });
+              } else if (value && typeof value === "object") {
+                const candidate = value as GoalItem;
+                flattened.push({ ...candidate, subject: candidate.subject || subject });
+              }
+          });
+        }
+        setGoals(flattened);
+      } catch {
+        setGoals([]);
+      }
+      try {
+        const rawActive = localStorage.getItem("timer_active_goal_by_subject");
+        const parsedActive = rawActive ? JSON.parse(rawActive) : {};
+        setActiveGoals(parsedActive || {});
+      } catch {
+        setActiveGoals({});
+      }
+    };
+
+    loadGoals();
+    const handler = () => loadGoals();
+    window.addEventListener("goals-updated", handler);
+    return () => window.removeEventListener("goals-updated", handler);
+  }, []);
+
+  useEffect(() => {
     const syncLiveSession = () => {
       try {
         const running = localStorage.getItem("timer_running") === "1";
         const startedAt = localStorage.getItem("timer_started_at");
         const subject = localStorage.getItem("timer_subject");
-        const mood = localStorage.getItem("timer_mood");
 
         if (running && startedAt) {
           const elapsed = Math.floor((Date.now() - Number(startedAt)) / 1000);
           setLiveSeconds(elapsed < 0 ? 0 : elapsed);
           setLiveSubject(subject || "");
-          setLiveMood(mood || "");
         } else {
           setLiveSeconds(null);
           setLiveSubject("");
-          setLiveMood("");
         }
       } catch {
         setLiveSeconds(null);
         setLiveSubject("");
-        setLiveMood("");
       }
     };
 
@@ -78,18 +122,11 @@ export default function MoodDashboard() {
 
     // Time filter
     if (timeFilter === "today") {
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      query = query.gte('created_at', since.toISOString());
+      const start = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      query = query.gte('created_at', start.toISOString());
     } else if (timeFilter === "week") {
-      const now = new Date();
-      const day = now.getDay();
-      const diff = (day + 6) % 7; // days since Monday
-      const monday = new Date(now);
-      monday.setHours(0, 0, 0, 0);
-      monday.setDate(now.getDate() - diff);
-      const nextMonday = new Date(monday);
-      nextMonday.setDate(monday.getDate() + 7);
-      query = query.gte('created_at', monday.toISOString()).lt('created_at', nextMonday.toISOString());
+      const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      query = query.gte('created_at', start.toISOString());
     }
 
     const { data, error } = await query;
@@ -123,7 +160,158 @@ export default function MoodDashboard() {
     }
   };
 
+  const formatDuration = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${h}h ${m}m ${sec}s`;
+  };
+
+  const formatTime = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${h}h ${m}m ${sec}s`;
+  };
+
+  const subjectColor = (subject: string) => {
+    const found = subjects.find((s) => s.name === subject);
+    return found?.color || "#64748b";
+  };
+
+  const displayGoalRemaining = (g: GoalItem) => {
+    if (liveSeconds === null) return g.remainingSeconds;
+    const activeId = activeGoals[g.subject];
+    if (liveSubject === g.subject && activeId === g.id) {
+      return Math.max(g.remainingSeconds - liveSeconds, 0);
+    }
+    return g.remainingSeconds;
+  };
+
+  const fetchSubjects = async () => {
+    const { data, error } = await supabase
+      .from("subjects")
+      .select("*")
+      .order("name");
+    if (!error && data) {
+      setSubjects(data as Subject[]);
+    }
+  };
+
   if (loading) return <div className="text-center py-8">Loading...</div>;
+
+  const renderGoalsSection = () => (
+    <div className="bg-white p-6 rounded-xl shadow">
+      <h3 className="text-2xl font-semibold mb-6 text-[#0b2b26]">🎯 Goals</h3>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+          <div className="text-emerald-700 font-semibold mb-3">Doing</div>
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+            {[...doingGoals]
+              .sort((a, b) => {
+                const aActive = activeGoals[a.subject] === a.id ? 1 : 0;
+                const bActive = activeGoals[b.subject] === b.id ? 1 : 0;
+                if (aActive !== bActive) return bActive - aActive;
+                return b.createdAt - a.createdAt;
+              })
+              .map((g) => {
+              const isActive = activeGoals[g.subject] === g.id;
+              const remaining = displayGoalRemaining(g);
+              return (
+                <div
+                  key={g.id}
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                    isActive ? "border-emerald-400 bg-white" : "border-emerald-200 bg-emerald-100/40"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: subjectColor(g.subject) }} />
+                    <div className="text-sm">
+                      <div className="font-medium text-[#0b2b26]">{g.title}</div>
+                      <div className="text-xs text-[#1e3a34]">{g.subject}</div>
+                      <div className="text-xs text-emerald-700">
+                        Remaining {formatTime(remaining)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {!doingGoals.length && <div className="text-sm text-emerald-700">No active goals</div>}
+          </div>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="text-slate-700 font-semibold mb-3">Completed</div>
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+            {[...completedGoals]
+              .sort((a, b) => {
+                const aActive = activeGoals[a.subject] === a.id ? 1 : 0;
+                const bActive = activeGoals[b.subject] === b.id ? 1 : 0;
+                if (aActive !== bActive) return bActive - aActive;
+                return b.createdAt - a.createdAt;
+              })
+              .map((g) => {
+              const isActive = activeGoals[g.subject] === g.id;
+              return (
+                <div
+                  key={g.id}
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                    isActive ? "border-slate-400 bg-white" : "border-slate-200 bg-slate-100/40"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: subjectColor(g.subject) }} />
+                    <div className="text-sm">
+                      <div className="font-medium text-[#0b2b26]">{g.title}</div>
+                      <div className="text-xs text-[#1e3a34]">{g.subject}</div>
+                      <div className="text-xs text-slate-600">Total {formatTime(g.totalSeconds)}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {!completedGoals.length && <div className="text-sm text-slate-600">No completed goals</div>}
+          </div>
+        </div>
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+          <div className="text-rose-700 font-semibold mb-3">Expired</div>
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+            {[...expiredGoals]
+              .sort((a, b) => {
+                const aActive = activeGoals[a.subject] === a.id ? 1 : 0;
+                const bActive = activeGoals[b.subject] === b.id ? 1 : 0;
+                if (aActive !== bActive) return bActive - aActive;
+                return b.createdAt - a.createdAt;
+              })
+              .map((g) => {
+              const isActive = activeGoals[g.subject] === g.id;
+              const remaining = displayGoalRemaining(g);
+              return (
+                <div
+                  key={g.id}
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                    isActive ? "border-rose-400 bg-white" : "border-rose-200 bg-rose-100/40"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: subjectColor(g.subject) }} />
+                    <div className="text-sm">
+                      <div className="font-medium text-[#0b2b26]">{g.title}</div>
+                      <div className="text-xs text-[#1e3a34]">{g.subject}</div>
+                      <div className="text-xs text-rose-700">
+                        Remaining {formatTime(remaining)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {!expiredGoals.length && <div className="text-sm text-rose-700">No expired goals</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   if (!tasks.length) {
     return (
@@ -131,38 +319,85 @@ export default function MoodDashboard() {
         <p className="text-gray-400 text-center py-8">No data yet. Start tracking!</p>
 
         {liveSeconds !== null && (
-          <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-6 rounded-xl shadow">
-            <div className="flex items-center justify-between mb-2">
+            <div className="bg-white p-6 rounded-xl shadow border-2 border-emerald-200">
+              <div className="flex items-center justify-between mb-2 text-emerald-900">
               <h3 className="text-xl font-semibold">🟢 Live Session</h3>
-              <span className="text-3xl">{liveMood || "😐"}</span>
+              
             </div>
             <div className="text-sm text-gray-600 mb-2">
               {liveSubject || "No subject selected"}
             </div>
-            <div className="text-3xl font-bold text-indigo-900">
-              {formatDuration(liveSeconds)}
+              <div className="text-3xl font-bold text-emerald-900">
+                {formatDuration(liveSeconds)}
+              </div>
             </div>
-          </div>
         )}
+
+        {renderGoalsSection()}
         
         {/* Mistake Tracker бүр харагдана */}
         <div className="border-t-4 border-orange-300 pt-8">
-          <h2 className="text-3xl font-bold mb-6 flex items-center gap-2">
-            ⚠️ Mistake Tracker
-          </h2>
-          <MistakeTracker />
+          <h2 className="text-3xl font-bold mb-6 flex items-center gap-2 text-[#0b2b26]">
+          ⚠️ Mistake Tracker
+        </h2>
+          <MistakeTracker timeFilter={timeFilter} />
         </div>
       </div>
     );
   }
 
-  // Mood stats
-  const moodStats = tasks.reduce((acc: Record<string, number>, t) => {
-    acc[t.mood] = (acc[t.mood] || 0) + t.duration;
+  const filterAllTimeTasks = () => {
+    if (timeFilter === "week") {
+      const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      return allTasks.filter((t) => new Date(t.created_at) >= start);
+    }
+    return allTasks;
+  };
+
+  const displayTasks = timeFilter === "week" ? filterAllTimeTasks() : tasks;
+  const totalDurationSeconds = tasks.reduce((sum, t) => sum + t.duration, 0);
+  const totalSelectedSeconds = displayTasks.reduce((sum, t) => sum + t.duration, 0);
+  const allTimeLabel = timeFilter === "week" ? "Last 7 Days Total" : "Last 24 Hours Total";
+  const allTimeSubLabel = timeFilter === "week" ? "Last 7 days" : "Last 24 hours";
+
+  const periodLabel = timeFilter === "today" ? "Сүүлийн 24 цагийн" : "Сүүлийн 7 хоногийн";
+
+  const normalizeMood = (mood: string) => {
+    const trimmed = (mood || "").trim();
+    if (!trimmed) return "";
+    const map: Record<string, string> = {
+      "🙂": "😊",
+      "😐": "😐",
+      "😵": "😫",
+      "😔": "😔",
+      "😫": "😫",
+      "😴": "😴",
+      // legacy mojibake
+      "ðŸ™‚": "😊",
+      "ðŸ˜": "😐",
+      "ðŸ˜µ": "😫",
+    };
+    return map[trimmed] || trimmed;
+  };
+
+  // Mood stats (count-based) - ignore in-progress sessions
+  const moodStats = displayTasks.reduce((acc: Record<string, number>, t) => {
+    if (!t.duration || t.duration <= 0) return acc;
+    const moodKey = normalizeMood(t.mood || "");
+    if (!moodKey) return acc;
+    acc[moodKey] = (acc[moodKey] || 0) + 1;
     return acc;
   }, {});
 
-  const totalSeconds = Object.values(moodStats).reduce((a: number, b: number) => a + b, 0);
+  const totalMoodCount = Object.values(moodStats).reduce((a: number, b: number) => a + b, 0);
+
+  const moodColors: Record<string, string> = {
+    "😊": "#10b981",
+    "😐": "#f59e0b",
+    "😔": "#3b82f6",
+    "😫": "#f97316",
+    "😴": "#8b5cf6",
+  };
 
   // Analytics (based on all tasks)
   const today = new Date();
@@ -181,11 +416,6 @@ export default function MoodDashboard() {
     return acc;
   }, {});
 
-  const weeklyTotalSeconds = last7Days.reduce((sum, d) => {
-    const key = d.toISOString().slice(0, 10);
-    return sum + (byDay[key] || 0);
-  }, 0);
-
   const getWeekRange = (base: Date) => {
     const day = base.getDay();
     const diff = (day + 6) % 7;
@@ -197,14 +427,6 @@ export default function MoodDashboard() {
     return { monday, nextMonday };
   };
 
-  const getRolling24HoursTotal = () => {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    return allTasks.reduce((sum, t) => {
-      const dt = new Date(t.created_at);
-      return dt >= since ? sum + t.duration : sum;
-    }, 0);
-  };
-
   const getCurrentWeekTotal = () => {
     const { monday, nextMonday } = getWeekRange(new Date());
     return allTasks.reduce((sum, t) => {
@@ -213,25 +435,6 @@ export default function MoodDashboard() {
     }, 0);
   };
 
-  const getCurrentMonthTotal = () => {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
-    return allTasks.reduce((sum, t) => {
-      const dt = new Date(t.created_at);
-      return dt >= start && dt < end ? sum + t.duration : sum;
-    }, 0);
-  };
-
-  const getCurrentYearTotal = () => {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
-    const end = new Date(now.getFullYear() + 1, 0, 1, 0, 0, 0, 0);
-    return allTasks.reduce((sum, t) => {
-      const dt = new Date(t.created_at);
-      return dt >= start && dt < end ? sum + t.duration : sum;
-    }, 0);
-  };
 
   const activityDays = new Set(
     allTasks
@@ -256,7 +459,7 @@ export default function MoodDashboard() {
   }
 
   // Subject stats
-  const subjectStats = tasks.reduce((acc: Record<string, number>, t) => {
+  const subjectStats = displayTasks.reduce((acc: Record<string, number>, t) => {
     acc[t.task] = (acc[t.task] || 0) + t.duration;
     return acc;
   }, {});
@@ -265,88 +468,75 @@ export default function MoodDashboard() {
     .sort(([, a], [, b]) => b - a)
     .slice(0, 5);
 
-  const formatDuration = (s: number) => {
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    return `${h}h ${m}m ${sec}s`;
-  };
+  const topMoodEntry = Object.entries(moodStats).sort(([, a], [, b]) => b - a)[0];
+  const topMood = topMoodEntry ? topMoodEntry[0] : "—";
+  const avgSeconds = displayTasks.length ? Math.floor(totalSelectedSeconds / displayTasks.length) : 0;
+  const topSubject = topSubjects[0]?.[0] ?? "—";
 
-  const formatTime = (s: number) => {
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    return `${h}h ${m}m ${sec}s`;
-  };
-
-  const getMondayStart = (d: Date) => {
-    const day = d.getDay();
-    const diff = (day + 6) % 7;
-    const monday = new Date(d);
-    monday.setHours(0, 0, 0, 0);
-    monday.setDate(d.getDate() - diff);
-    return monday;
-  };
-
-  const getAllTimeTrend = () => {
-    const source = allTasks;
+  const getAllTimeTrend = (source: Task[]) => {
     const buckets: Record<string, number> = {};
 
     source.forEach((t) => {
       const d = new Date(t.created_at);
       let key = "";
-      if (allTimeGroup === "day") {
+      if (allTimeGroup === "week" || allTimeGroup === "month") {
         d.setHours(0, 0, 0, 0);
         key = d.toISOString().slice(0, 10);
-      } else if (allTimeGroup === "week") {
-        const monday = getMondayStart(d);
-        key = monday.toISOString().slice(0, 10);
-      } else if (allTimeGroup === "month") {
+      } else {
         const y = d.getFullYear();
         const m = String(d.getMonth() + 1).padStart(2, "0");
         key = `${y}-${m}`;
-      } else {
-        key = String(d.getFullYear());
       }
       buckets[key] = (buckets[key] || 0) + t.duration;
     });
 
     const keys = Object.keys(buckets).sort();
-    const limit =
-      allTimeGroup === "day" ? 30 : allTimeGroup === "week" ? 26 : allTimeGroup === "month" ? 24 : 10;
+    const limit = allTimeGroup === "week" ? 7 : allTimeGroup === "month" ? 31 : 12;
     const sliced = keys.slice(-limit);
     return sliced.map((key) => ({ key, seconds: buckets[key] || 0 }));
   };
 
   const trendData =
-    timeFilter === "all"
-      ? getAllTimeTrend().map((x) => ({ key: x.key, seconds: x.seconds, label: x.key }))
+    timeFilter === "week"
+      ? getAllTimeTrend(displayTasks).map((x) => ({
+          key: x.key,
+          seconds: x.seconds,
+          label: new Date(x.key).toLocaleDateString("en-US", { weekday: "short" }),
+        }))
       : last7Days.map((d) => ({
           key: d.toISOString().slice(0, 10),
           seconds: byDay[d.toISOString().slice(0, 10)] || 0,
           label: d.toLocaleDateString("en-US", { weekday: "short" }),
         }));
   const trendMax = Math.max(...trendData.map((x) => x.seconds), 1);
+  const nowMs = Date.now();
+  const completedGoals = goals.filter((g) => g.remainingSeconds <= 0);
+  const expiredGoals = goals.filter(
+    (g) => g.remainingSeconds > 0 && nowMs > g.createdAt + 24 * 60 * 60 * 1000
+  );
+  const doingGoals = goals.filter(
+    (g) => g.remainingSeconds > 0 && !(nowMs > g.createdAt + 24 * 60 * 60 * 1000)
+  );
 
   return (
     <div className="space-y-8">
       {liveSeconds !== null && (
-        <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-6 rounded-xl shadow">
-          <div className="flex items-center justify-between mb-2">
+        <div className="bg-white p-6 rounded-xl shadow border-2 border-emerald-200">
+          <div className="flex items-center justify-between mb-2 text-emerald-900">
             <h3 className="text-xl font-semibold">🟢 Live Session</h3>
-            <span className="text-3xl">{liveMood || "😐"}</span>
+            
           </div>
           <div className="text-sm text-gray-600 mb-2">
             {liveSubject || "No subject selected"}
           </div>
-          <div className="text-3xl font-bold text-indigo-900">
+          <div className="text-3xl font-bold text-emerald-900">
             {formatDuration(liveSeconds)}
           </div>
         </div>
       )}
       {/* Time Filter */}
       <div className="flex gap-2 justify-center">
-        {(["today", "week", "all"] as const).map((filter) => (
+        {(["today", "week"] as const).map((filter) => (
           <button
             key={filter}
             onClick={() => setTimeFilter(filter)}
@@ -356,66 +546,52 @@ export default function MoodDashboard() {
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
             }`}
           >
-            {filter === "today"
-              ? "Today"
-              : filter === "week"
-              ? "This Week"
-              : "All Time"}
+            {filter === "today" ? "Today" : "Week"}
           </button>
         ))}
       </div>
-
-      {timeFilter === "all" && (
-        <div className="flex flex-wrap gap-2 justify-center">
-          {(["day", "week", "month", "year"] as const).map((g) => (
-            <button
-              key={g}
-              onClick={() => setAllTimeGroup(g)}
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                allTimeGroup === g
-                  ? "bg-indigo-600 text-white shadow-md"
-                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
-            >
-              {g === "day" ? "Day" : g === "week" ? "Week" : g === "month" ? "Month" : "Year"}
-            </button>
-          ))}
+      {timeFilter === "week" && (
+        <div className="flex justify-center">
+          <div className="text-sm text-gray-500">Last 7 days</div>
         </div>
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-6 rounded-xl shadow">
-          <div className="text-blue-600 text-sm font-medium mb-1">
-            {timeFilter === "today"
-              ? "Total Study Time"
-              : timeFilter === "week"
-              ? "This Week Total"
-              : allTimeGroup === "day"
-              ? "Total Study Time (24h)"
-              : allTimeGroup === "week"
-              ? "This Week Total"
-              : allTimeGroup === "month"
-              ? "This Month Total"
-              : "This Year Total"}
-          </div>
+          <div className="text-blue-600 text-sm font-medium mb-1">{periodLabel} нийт хугацаа</div>
           <div className="text-3xl font-bold text-blue-900">
-            {timeFilter === "today"
-              ? formatTime(totalSeconds)
-              : timeFilter === "week"
-              ? formatTime(totalSeconds)
-              : allTimeGroup === "day"
-              ? formatTime(getRolling24HoursTotal())
-              : allTimeGroup === "week"
-              ? formatTime(getCurrentWeekTotal())
-              : allTimeGroup === "month"
-              ? formatTime(getCurrentMonthTotal())
-              : formatTime(getCurrentYearTotal())}
+            {timeFilter === "today" ? formatTime(totalDurationSeconds) : formatTime(totalSelectedSeconds)}
           </div>
         </div>
         <div className="bg-gradient-to-br from-green-50 to-green-100 p-6 rounded-xl shadow">
-          <div className="text-green-600 text-sm font-medium mb-1">Total Sessions</div>
-          <div className="text-3xl font-bold text-green-900">{tasks.length}</div>
+          <div className="text-green-600 text-sm font-medium mb-1">{periodLabel} сешн</div>
+          <div className="text-3xl font-bold text-green-900">{displayTasks.length}</div>
+        </div>
+        <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-6 rounded-xl shadow">
+          <div className="text-purple-600 text-sm font-medium mb-1">{periodLabel} top mood</div>
+          <div className="text-3xl font-bold text-purple-900">{topMood}</div>
+        </div>
+        <div className="bg-gradient-to-br from-amber-50 to-amber-100 p-6 rounded-xl shadow">
+          <div className="text-amber-700 text-sm font-medium mb-1">{periodLabel} дундаж сешн</div>
+          <div className="text-3xl font-bold text-amber-900">{formatTime(avgSeconds)}</div>
+        </div>
+        <div className="bg-gradient-to-br from-rose-50 to-rose-100 p-6 rounded-xl shadow">
+          <div className="text-rose-700 text-sm font-medium mb-1">{periodLabel} top subject</div>
+          <div className="text-2xl font-bold text-rose-900 truncate">{topSubject}</div>
+        </div>
+        <div className="bg-gradient-to-br from-slate-50 to-slate-100 p-6 rounded-xl shadow">
+          <div className="text-slate-600 text-sm font-medium mb-2">{periodLabel} mood count</div>
+          <div className="flex flex-wrap gap-3 text-2xl font-bold text-slate-900">
+            {Object.entries(moodStats)
+              .sort(([, a], [, b]) => b - a)
+              .map(([mood, count]) => (
+                <span key={mood}>
+                  {mood} {count}
+                </span>
+              ))}
+            {!Object.keys(moodStats).length && <span>—</span>}
+          </div>
         </div>
       </div>
 
@@ -429,74 +605,23 @@ export default function MoodDashboard() {
         {timeFilter !== "today" && (
           <div className="bg-white p-6 rounded-xl shadow">
             <div className="text-sm text-gray-500 mb-1">
-              {timeFilter === "all"
-                ? allTimeGroup === "day"
-                  ? "Last 24 Hours Total"
-                  : allTimeGroup === "week"
-                  ? "This Week Total"
-                  : allTimeGroup === "month"
-                  ? "This Month Total"
-                  : "This Year Total"
-                : "This Week Total"}
+              {allTimeLabel}
             </div>
             <div className="text-3xl font-bold text-indigo-700">
-              {timeFilter === "all"
-                ? allTimeGroup === "day"
-                  ? formatTime(getRolling24HoursTotal())
-                  : allTimeGroup === "week"
-                  ? formatTime(getCurrentWeekTotal())
-                  : allTimeGroup === "month"
-                  ? formatTime(getCurrentMonthTotal())
-                  : formatTime(getCurrentYearTotal())
-                : formatTime(getCurrentWeekTotal())}
+              {formatTime(totalSelectedSeconds)}
             </div>
             <div className="text-xs text-gray-400 mt-1">
-              {timeFilter === "all"
-                ? allTimeGroup === "day"
-                  ? "Rolling 24 hours"
-                  : allTimeGroup === "week"
-                  ? "Monday to Sunday"
-                  : allTimeGroup === "month"
-                  ? "This calendar month"
-                  : "This calendar year"
-                : "Monday to Sunday"}
+              {allTimeSubLabel}
             </div>
           </div>
         )}
       </div>
 
       {/* 7-Day Activity Bar */}
-      {timeFilter !== "today" && (
-        <div className="bg-white p-6 rounded-xl shadow">
-          <h3 className="text-2xl font-semibold mb-4">
-            {timeFilter === "all" ? "📈 All Time Trend" : "📈 Last 7 Days Activity"}
-          </h3>
-          <div className="space-y-3">
-            {trendData.map((item) => {
-              const pct = (item.seconds / trendMax) * 100;
-              return (
-                <div key={item.key} className="flex items-center gap-3">
-                  <div className="w-24 text-xs text-gray-500">{item.label}</div>
-                  <div className="flex-1 bg-gray-200 rounded-full h-3 overflow-hidden">
-                    <div
-                      className="h-3 bg-indigo-500 rounded-full"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <div className="w-24 text-right text-xs text-gray-600">
-                    {formatTime(item.seconds)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
 
       {/* Top Subjects */}
       <div className="bg-white p-6 rounded-xl shadow">
-        <h3 className="text-2xl font-semibold mb-6">📚 Top Subjects</h3>
+        <h3 className="text-2xl font-semibold mb-6 text-[#0b2b26]">📚 Top Subjects</h3>
         <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
           {topSubjects.map(([subject, seconds], index) => {
             const maxDuration = topSubjects[0][1];
@@ -508,8 +633,8 @@ export default function MoodDashboard() {
                 </div>
                 <div className="flex-1">
                   <div className="flex justify-between mb-1">
-                    <span className="font-medium">{subject}</span>
-                    <span className="text-gray-600">{formatDuration(seconds)}</span>
+                    <span className="font-medium text-[#0b2b26]">{subject}</span>
+                    <span className="text-[#1e3a34]">{formatDuration(seconds)}</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2">
                     <div
@@ -524,80 +649,20 @@ export default function MoodDashboard() {
         </div>
       </div>
 
-      {/* Recent Sessions Timeline */}
-      <div className="bg-white p-6 rounded-xl shadow">
-        <h4 className="text-xl font-semibold mb-4">📝 Recent Sessions</h4>
-        <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
-          {tasks.slice(0, 10).map((t) => (
-            <div
-              key={t.id}
-              className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition"
-            >
-              <div className="text-3xl">{t.mood}</div>
-              <div className="flex-1">
-                <div className="font-medium">{t.task}</div>
-                <div className="text-sm text-gray-500">
-                  {new Date(t.created_at).toLocaleString()}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="font-bold text-indigo-600">{formatDuration(t.duration)}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Mood Analysis - Horizontal Bar Chart */}
-      <div className="bg-white p-6 rounded-xl shadow">
-        <h3 className="text-2xl font-semibold mb-6 flex items-center gap-2">
-          😊 Mood Analysis
-        </h3>
-        <div className="space-y-4">
-          {Object.entries(moodStats)
-            .sort(([, a], [, b]) => b - a)
-            .map(([mood, seconds]) => {
-              const percentage = (seconds / totalSeconds) * 100;
-              return (
-                <div key={mood}>
-                  <div className="flex justify-between mb-2">
-                    <span className="text-2xl">{mood}</span>
-                    <div className="text-right">
-                      <div className="font-bold">{formatDuration(seconds)}</div>
-                      <div className="text-sm text-gray-500">{percentage.toFixed(1)}%</div>
-                    </div>
-                  </div>
-                  <div className="relative w-full bg-gray-200 rounded-full h-8 overflow-hidden">
-                    <div
-                      className={`h-8 rounded-full transition-all duration-500 flex items-center justify-end pr-3 text-white font-medium ${
-                        mood === "🙂"
-                          ? "bg-gradient-to-r from-green-400 to-green-600"
-                          : mood === "😐"
-                          ? "bg-gradient-to-r from-yellow-400 to-yellow-600"
-                          : "bg-gradient-to-r from-red-400 to-red-600"
-                      }`}
-                      style={{ width: `${percentage}%` }}
-                    >
-                      {percentage > 20 && `${percentage.toFixed(0)}%`}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-        </div>
-      </div>
+      {/* Goals */}
+      {renderGoalsSection()}
 
       {/* Pie Chart - Mood Distribution */}
       <div className="bg-white p-6 rounded-xl shadow">
-        <h3 className="text-2xl font-semibold mb-6">🥧 Mood Distribution</h3>
+        <h3 className="text-2xl font-semibold mb-6 text-[#0b2b26]">🥧 Mood Distribution</h3>
         <div className="flex items-center justify-center">
           <div className="relative w-64 h-64">
             <svg viewBox="0 0 100 100" className="transform -rotate-90">
               {Object.entries(moodStats)
                 .sort(([, a], [, b]) => b - a)
                 .reduce(
-                  (acc, [mood, seconds], index) => {
-                    const percentage = (seconds / totalSeconds) * 100;
+                  (acc, [mood, count], index) => {
+                    const percentage = (count / totalMoodCount) * 100;
                     const angle = (percentage / 100) * 360;
                     const startAngle = acc.currentAngle;
                     const endAngle = startAngle + angle;
@@ -609,12 +674,7 @@ export default function MoodDashboard() {
 
                     const largeArc = angle > 180 ? 1 : 0;
 
-                    const color =
-                      mood === "🙂"
-                        ? "#10b981"
-                        : mood === "😐"
-                        ? "#f59e0b"
-                        : "#ef4444";
+                    const color = moodColors[mood] ?? "#94a3b8";
 
                     acc.elements.push(
                       <path
@@ -633,7 +693,7 @@ export default function MoodDashboard() {
             </svg>
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center">
-                <div className="text-4xl font-bold">{tasks.length}</div>
+                <div className="text-4xl font-bold">{displayTasks.length}</div>
                 <div className="text-sm text-gray-500">sessions</div>
               </div>
             </div>
@@ -642,30 +702,48 @@ export default function MoodDashboard() {
 
         {/* Legend */}
         <div className="flex justify-center gap-6 mt-6">
-          {Object.entries(moodStats)
-            .sort(([, a], [, b]) => b - a)
-            .map(([mood, seconds]) => {
-              const percentage = (seconds / totalSeconds) * 100;
-              const color =
-                mood === "🙂" ? "bg-green-500" : mood === "😐" ? "bg-yellow-500" : "bg-red-500";
-              return (
-                <div key={mood} className="flex items-center gap-2">
-                  <div className={`w-4 h-4 rounded ${color}`}></div>
-                  <span className="text-lg">{mood}</span>
-                  <span className="text-sm text-gray-500">({percentage.toFixed(0)}%)</span>
-                </div>
-              );
-            })}
+              {Object.entries(moodStats)
+                .sort(([, a], [, b]) => b - a)
+                .map(([mood, count]) => {
+                  const percentage = (count / totalMoodCount) * 100;
+                  const color = moodColors[mood] ?? "#94a3b8";
+                  return (
+                    <div key={mood} className="flex items-center gap-2">
+                      <div className="w-4 h-4 rounded" style={{ backgroundColor: color }}></div>
+                      <span className="text-lg">{mood}</span>
+                      <span className="text-sm text-gray-500">({percentage.toFixed(0)}%)</span>
+                    </div>
+                  );
+                })}
         </div>
       </div>
 
       {/* Mistake Tracker Section */}
       <div className="border-t-4 border-orange-300 pt-8">
-        <h2 className="text-3xl font-bold mb-6 flex items-center gap-2">
+        <h2 className="text-3xl font-bold mb-6 flex items-center gap-2 text-[#0b2b26]">
           ⚠️ Mistake Tracker
         </h2>
-        <MistakeTracker />
+        <MistakeTracker timeFilter={timeFilter} />
       </div>
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

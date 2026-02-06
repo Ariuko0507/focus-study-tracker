@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -20,7 +20,11 @@ interface Mistake {
   } | null;
 }
 
-export default function MistakeTracker() {
+interface MistakeTrackerProps {
+  timeFilter: "today" | "week";
+}
+
+export default function MistakeTracker({ timeFilter }: MistakeTrackerProps) {
   const [mistakes, setMistakes] = useState<Mistake[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "fixed" | "unfixed">("all");
@@ -32,20 +36,20 @@ export default function MistakeTracker() {
 
   const fetchMistakes = async () => {
     let query = supabase
-      .from('mistakes')
-      .select('*, session:task_id (id, task, mood, duration, created_at)')
-      .order('created_at', { ascending: false });
+      .from("mistakes")
+      .select("*, session:task_id (id, task, mood, duration, created_at)")
+      .order("created_at", { ascending: false });
 
     if (filter === "fixed") {
-      query = query.eq('is_fixed', true);
+      query = query.eq("is_fixed", true);
     } else if (filter === "unfixed") {
-      query = query.eq('is_fixed', false);
+      query = query.eq("is_fixed", false);
     }
 
     const { data, error } = await query;
 
     if (error) {
-      console.error('Error fetching mistakes:', error);
+      console.error("Error fetching mistakes:", error);
     } else {
       const normalized = (data || []).map((m) => ({
         ...m,
@@ -58,14 +62,28 @@ export default function MistakeTracker() {
     setLoading(false);
   };
 
+  const filterByTime = (items: Mistake[]) => {
+    const now = new Date();
+    if (timeFilter === "today") {
+      const startOfToday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      return items.filter((m) => {
+        const dt = new Date(m.created_at);
+        return dt >= startOfToday && dt <= now;
+      });
+    }
+
+    const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    return items.filter((m) => new Date(m.created_at) >= start);
+  };
+
   const toggleFixed = async (id: string, currentStatus: boolean) => {
     const { error } = await supabase
-      .from('mistakes')
+      .from("mistakes")
       .update({
         is_fixed: !currentStatus,
         fixed_at: !currentStatus ? new Date().toISOString() : null,
       })
-      .eq('id', id);
+      .eq("id", id);
 
     if (!error) {
       window.dispatchEvent(new Event("mistake-updated"));
@@ -75,11 +93,8 @@ export default function MistakeTracker() {
 
   const deleteMistake = async (id: string) => {
     if (!confirm("Delete this mistake?")) return;
-    
-    const { error } = await supabase
-      .from('mistakes')
-      .delete()
-      .eq('id', id);
+
+    const { error } = await supabase.from("mistakes").delete().eq("id", id);
 
     if (!error) {
       window.dispatchEvent(new Event("mistake-updated"));
@@ -96,31 +111,26 @@ export default function MistakeTracker() {
 
   if (loading) return <div className="text-center py-8">Loading mistakes...</div>;
 
-  const filteredMistakes = mistakes
+  const filteredMistakes = filterByTime(mistakes)
     .filter((m) =>
       filter === "all" ? true : filter === "fixed" ? m.is_fixed : !m.is_fixed
     )
     .filter((m) => (subjectFilter === "all" ? true : m.subject === subjectFilter));
 
-  // Statistics (global, not affected by filters)
-  const totalMistakes = mistakes.length;
-  const fixedMistakes = mistakes.filter(m => m.is_fixed).length;
+  const totalMistakes = filteredMistakes.length;
+  const fixedMistakes = filteredMistakes.filter((m) => m.is_fixed).length;
   const unfixedMistakes = totalMistakes - fixedMistakes;
   const fixRate = totalMistakes > 0 ? (fixedMistakes / totalMistakes) * 100 : 0;
 
-  // Subject breakdown
   const mistakesBySubject = filteredMistakes.reduce((acc: Record<string, number>, m) => {
     acc[m.subject] = (acc[m.subject] || 0) + 1;
     return acc;
   }, {});
 
-  const subjectOptions = Array.from(
-    new Set(mistakes.map((m) => m.subject))
-  ).sort();
+  const subjectOptions = Array.from(new Set(mistakes.map((m) => m.subject))).sort();
 
   return (
     <div className="space-y-6">
-      {/* Header Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-6 rounded-xl shadow">
           <div className="text-orange-600 text-sm font-medium mb-1">Total Mistakes</div>
@@ -140,7 +150,6 @@ export default function MistakeTracker() {
         </div>
       </div>
 
-      {/* Filter Controls */}
       <div className="flex flex-wrap gap-2 justify-center">
         {(["all", "unfixed", "fixed"] as const).map((f) => (
           <button
@@ -158,19 +167,20 @@ export default function MistakeTracker() {
         <select
           value={subjectFilter}
           onChange={(e) => setSubjectFilter(e.target.value)}
-          className="px-3 py-2 rounded-lg border bg-white text-gray-700"
+          className="px-3 py-2 rounded-lg border bg-[#e7f3ea] text-[#0b2b26] border-[#8eb69b]"
         >
           <option value="all">All Subjects</option>
           {subjectOptions.map((s) => (
-            <option key={s} value={s}>{s}</option>
+            <option key={s} value={s}>
+              {s}
+            </option>
           ))}
         </select>
       </div>
 
-      {/* Mistakes by Subject Chart */}
       {Object.keys(mistakesBySubject).length > 0 && (
         <div className="bg-white p-6 rounded-xl shadow-lg">
-          <h3 className="text-2xl font-semibold mb-6 flex items-center gap-2">
+          <h3 className="text-2xl font-semibold mb-6 flex items-center gap-2 text-[#0b2b26]">
             📚 Mistakes by Subject
           </h3>
           <div className="space-y-4">
@@ -182,8 +192,10 @@ export default function MistakeTracker() {
                 return (
                   <div key={subject}>
                     <div className="flex justify-between mb-2">
-                      <span className="font-semibold text-lg">{subject}</span>
-                      <span className="text-orange-600 font-bold text-lg">{count} mistake{count > 1 ? 's' : ''}</span>
+                      <span className="font-semibold text-lg text-[#0b2b26]">{subject}</span>
+                      <span className="text-[#235347] font-bold text-lg">
+                        {count} mistake{count > 1 ? "s" : ""}
+                      </span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
                       <div
@@ -198,18 +210,17 @@ export default function MistakeTracker() {
         </div>
       )}
 
-      {/* Mistakes List */}
       <div className="bg-white p-6 rounded-xl shadow-lg">
-        <h3 className="text-2xl font-semibold mb-6 flex items-center gap-2">
+        <h3 className="text-2xl font-semibold mb-6 flex items-center gap-2 text-[#0b2b26]">
           ⚠️ Mistake Log
         </h3>
-        
+
         {filteredMistakes.length === 0 ? (
-          <div className="bg-gradient-to-br from-gray-50 to-gray-100 p-12 rounded-xl text-center">
+          <div className="bg-gradient-to-br from-[#e7f3ea] to-[#d9ebe0] p-12 rounded-xl text-center">
             <div className="text-6xl mb-4">🎯</div>
-            <p className="text-gray-500 text-lg font-medium">
-              {filter === "all" 
-                ? "No mistakes logged yet. Keep learning!" 
+            <p className="text-[#0b2b26] text-lg font-medium">
+              {filter === "all"
+                ? "No mistakes logged yet. Keep learning!"
                 : filter === "fixed"
                 ? "No fixed mistakes yet."
                 : "No unfixed mistakes. Great job! 🎉"}
@@ -222,49 +233,43 @@ export default function MistakeTracker() {
                 key={m.id}
                 className={`p-5 rounded-xl border-2 transition shadow-md hover:shadow-lg ${
                   m.is_fixed
-                    ? "bg-green-50 border-green-300"
-                    : "bg-orange-50 border-orange-300"
+                    ? "bg-[#e7f3ea] border-[#8eb69b]"
+                    : "bg-[#d9ebe0] border-[#235347]"
                 }`}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
-                    {/* Subject & Time */}
                     <div className="flex flex-wrap items-center gap-3 mb-3">
-                      <span className="text-2xl font-bold text-gray-800">{m.subject}</span>
-                      <span className="px-3 py-1 bg-gray-200 rounded-full text-sm font-medium text-gray-600">
+                      <span className="text-2xl font-bold text-[#0b2b26]">{m.subject}</span>
+                      <span className="px-3 py-1 bg-[#cfe3d6] rounded-full text-sm font-medium text-[#1e3a34]">
                         ⏱ at {formatTime(m.mistake_time)}
                       </span>
                       {m.is_fixed && (
-                        <span className="px-3 py-1 bg-green-600 text-white rounded-full text-sm font-bold">
+                        <span className="px-3 py-1 bg-[#163832] text-[#daf1de] rounded-full text-sm font-bold">
                           ✅ FIXED
                         </span>
                       )}
                     </div>
 
-                    {/* Description */}
                     <p className="text-gray-700 text-base mb-3 leading-relaxed">
                       {m.mistake_description}
                     </p>
 
-                    {/* Timestamps */}
                     <div className="flex flex-col gap-1 text-xs text-gray-500">
-                      <div>
-                        📅 Logged: {new Date(m.created_at).toLocaleString()}
-                      </div>
-                      {m.session && (
+                      <div>📅 Logged: {new Date(m.created_at).toLocaleString()}</div>
+                      {m.session && m.session.duration > 0 && (
                         <div className="text-indigo-600 font-medium">
                           📘 Session: {m.session.task} • {formatTime(m.session.duration)} • {m.session.mood}
                         </div>
                       )}
                       {m.is_fixed && m.fixed_at && (
                         <div className="text-green-600 font-medium">
-                          ✓ Fixed: {new Date(m.fixed_at).toLocaleString()}
+                          ✅ Fixed: {new Date(m.fixed_at).toLocaleString()}
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Action Buttons */}
                   <div className="flex flex-col gap-2">
                     <button
                       onClick={() => toggleFixed(m.id, m.is_fixed)}
@@ -290,19 +295,21 @@ export default function MistakeTracker() {
         )}
       </div>
 
-      {/* Progress Insight */}
       {totalMistakes > 0 && (
         <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 rounded-xl border-2 border-indigo-200">
           <h4 className="text-xl font-bold text-indigo-900 mb-3">💡 Learning Insight</h4>
           <p className="text-gray-700 leading-relaxed">
-            {fixRate === 100 
-              ? "🎉 Amazing! You've fixed all your mistakes. Keep up the excellent work!"
+            {fixRate === 100
+              ? "🎉 Amazing! You\'ve fixed all your mistakes. Keep up the excellent work!"
               : fixRate >= 70
-              ? `🌟 Great progress! You've fixed ${fixRate.toFixed(0)}% of your mistakes. Keep going!`
+              ? `🌟 Great progress! You\'ve fixed ${fixRate.toFixed(0)}% of your mistakes. Keep going!`
               : fixRate >= 40
-              ? `📈 You're making progress! ${unfixedMistakes} mistake${unfixedMistakes > 1 ? 's' : ''} still need${unfixedMistakes === 1 ? 's' : ''} attention.`
-              : `💪 Time to review! Focus on fixing those ${unfixedMistakes} mistake${unfixedMistakes > 1 ? 's' : ''}.`
-            }
+              ? `📈 You\'re making progress! ${unfixedMistakes} mistake${unfixedMistakes > 1 ? "s" : ""} still need${
+                  unfixedMistakes === 1 ? "s" : ""
+                } attention.`
+              : `💪 Time to review! Focus on fixing those ${unfixedMistakes} mistake${
+                  unfixedMistakes > 1 ? "s" : ""
+                }.`}
           </p>
         </div>
       )}
